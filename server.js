@@ -1,11 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const Database = require("better-sqlite3");
 const nodemailer = require("nodemailer");
-const path = require("path");
+const { Pool } = require("pg");
 
-// Load environment variables from .env
 dotenv.config();
 
 const app = express();
@@ -16,27 +14,38 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve portfolio website files
+// Serve portfolio website files locally
 app.use(express.static(__dirname));
 
-// Connect to SQLite database
-const db = new Database(path.join(__dirname, "portfolio.db"));
+// Connect to Neon PostgreSQL
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
 
-// Create the messages table if it does not exist
-db.exec(`
+// Create the messages table in PostgreSQL
+const createTable = pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id BIGSERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT NOT NULL,
         subject TEXT NOT NULL,
         message TEXT NOT NULL,
-        createdAt TEXT NOT NULL
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
 `);
 
-console.log("SQLite database connected successfully!");
+createTable
+    .then(() => {
+        console.log("Neon PostgreSQL connected successfully!");
+    })
+    .catch((error) => {
+        console.error("Database initialization error:", error.message);
+    });
 
-// Configure Gmail using your Google App Password
+// Configure Gmail
 const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
@@ -46,12 +55,23 @@ const transporter = nodemailer.createTransport({
 });
 
 // Backend status route
-app.get("/api/status", (req, res) => {
-    res.json({
-        success: true,
-        message: "Thiranex Portfolio Backend is running!",
-        database: "Connected (SQLite)"
-    });
+app.get("/api/status", async (req, res) => {
+    try {
+        await pool.query("SELECT 1");
+
+        res.json({
+            success: true,
+            message: "Thiranex Portfolio Backend is running!",
+            database: "Connected (Neon PostgreSQL)"
+        });
+    } catch (error) {
+        console.error("Status error:", error.message);
+
+        res.status(500).json({
+            success: false,
+            message: "Database connection failed."
+        });
+    }
 });
 
 // Contact form route
@@ -59,7 +79,7 @@ app.post("/api/contact", async (req, res) => {
     try {
         const { name, email, subject, message } = req.body;
 
-        // Validate form fields
+        // Validate the form fields
         if (
             typeof name !== "string" ||
             typeof email !== "string" ||
@@ -76,36 +96,33 @@ app.post("/api/contact", async (req, res) => {
             });
         }
 
-        // Save message in SQLite
-        const saveMessage = db.prepare(`
-            INSERT INTO messages
-            (name, email, subject, message, createdAt)
-            VALUES (?, ?, ?, ?, ?)
-        `);
+        const cleanName = name.trim();
+        const cleanEmail = email.trim();
+        const cleanSubject = subject.trim();
+        const cleanMessage = message.trim();
 
-        saveMessage.run(
-            name.trim(),
-            email.trim(),
-            subject.trim(),
-            message.trim(),
-            new Date().toISOString()
+        // Save the contact message in Neon PostgreSQL
+        await pool.query(
+            `INSERT INTO messages (name, email, subject, message)
+             VALUES ($1, $2, $3, $4)`,
+            [cleanName, cleanEmail, cleanSubject, cleanMessage]
         );
 
-        // Send message to your Gmail inbox
+        // Send the message to your Gmail inbox
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: process.env.EMAIL_USER,
-            replyTo: email.trim(),
-            subject: `Portfolio Contact: ${subject.trim()}`,
+            replyTo: cleanEmail,
+            subject: `Portfolio Contact: ${cleanSubject}`,
             text: `
 You have received a new message through your portfolio website.
 
-Name: ${name.trim()}
-Email: ${email.trim()}
-Subject: ${subject.trim()}
+Name: ${cleanName}
+Email: ${cleanEmail}
+Subject: ${cleanSubject}
 
 Message:
-${message.trim()}
+${cleanMessage}
             `
         });
 
@@ -121,18 +138,18 @@ ${message.trim()}
 
         return res.status(500).json({
             success: false,
-            message: "The message could not be emailed. Please try again."
+            message: "Something went wrong. Please try again."
         });
     }
 });
 
-// Start the server
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-});
+// Start the server locally.
+// Vercel will import the app as a serverless function.
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`Server running at http://localhost:${PORT}`);
+    });
+}
 
-// Close database connection when the server exits
-process.on("SIGINT", () => {
-    db.close();
-    process.exit(0);
-});
+// Export the app for Vercel
+module.exports = app;
