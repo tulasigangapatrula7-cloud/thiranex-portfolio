@@ -1,0 +1,17 @@
+{
+  "name": "thiranex-portfolio",
+  "version": "1.0.0",
+  "description": "Personal Portfolio Website",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "mongodb": "^7.7.0",
+    "nodemailer": "^10.0.16"
+  }
+}
